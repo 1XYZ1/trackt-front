@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import {
   Card,
   CardContent,
@@ -5,89 +6,132 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Truck, Wrench, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { OverviewChart } from './overview-chart';
 
 const stats = [
-  { label: 'Equipos registrados', value: 12, icon: Truck },
-  { label: 'Mantenciones pendientes', value: 4, icon: Wrench },
-  { label: 'Mantenciones completadas', value: 8, icon: CheckCircle2 },
-  { label: 'Alertas activas', value: 2, icon: AlertTriangle },
+  {
+    label: 'Equipos registrados',
+    value: '12',
+    delta: '+2 desde el mes pasado',
+    icon: Truck,
+  },
+  {
+    label: 'Mantenciones pendientes',
+    value: '4',
+    delta: '+1 esta semana',
+    icon: Wrench,
+  },
+  {
+    label: 'Mantenciones completadas',
+    value: '8',
+    delta: '+3 desde el mes pasado',
+    icon: CheckCircle2,
+  },
+  {
+    label: 'Alertas activas',
+    value: '2',
+    delta: '-1 desde ayer',
+    icon: AlertTriangle,
+  },
 ];
 
-const recentActivity = [
-  { title: 'Equipo agregado', desc: 'Se registró una nueva excavadora.' },
-  { title: 'Mantención actualizada', desc: 'Se cambió el estado a pendiente.' },
-  { title: 'Alerta generada', desc: 'Equipo requiere revisión preventiva.' },
-];
-
-const upcomingMaintenance = [
-  { equipo: 'Camión tolva', tipo: 'Cambio de aceite', estado: 'Pendiente' },
-  { equipo: 'Excavadora', tipo: 'Revisión hidráulica', estado: 'Pendiente' },
-  { equipo: 'Grúa horquilla', tipo: 'Inspección general', estado: 'Programada' },
+const recentSales = [
+  { name: 'Camión tolva CAT 770G', email: 'Cambio de aceite', amount: 'Pendiente' },
+  { name: 'Excavadora CAT 320', email: 'Revisión hidráulica', amount: 'Pendiente' },
+  { name: 'Grúa horquilla Hyster', email: 'Inspección general', amount: 'Programada' },
+  { name: 'Cargador frontal 950M', email: 'Cambio de filtros', amount: 'Programada' },
+  { name: 'Retroexcavadora 420F', email: 'Engrase general', amount: 'Pendiente' },
 ];
 
 export default function DashboardPage() {
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Bienvenida a Trackt</h1>
-        <p className="text-muted-foreground">
-          Resumen general del estado de equipos, mantenciones y alertas.
-        </p>
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+          <p className="text-muted-foreground">
+            Resumen general del estado de equipos, mantenciones y alertas.
+          </p>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((s) => (
-          <Card key={s.label}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardDescription>{s.label}</CardDescription>
-              <s.icon className="size-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{s.value}</div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      <Tabs defaultValue="overview" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="overview">Vista general</TabsTrigger>
+          <TabsTrigger value="analytics" disabled>
+            Analítica
+          </TabsTrigger>
+          <TabsTrigger value="reports" disabled>
+            Reportes
+          </TabsTrigger>
+        </TabsList>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Actividad reciente</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            {recentActivity.map((a, i) => (
-              <div key={i} className="border-b last:border-0 pb-3 last:pb-0">
-                <p className="font-medium">{a.title}</p>
-                <p className="text-sm text-muted-foreground">{a.desc}</p>
-              </div>
+        <TabsContent value="overview" className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {stats.map((s) => (
+              <Card key={s.label}>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium">
+                    {s.label}
+                  </CardTitle>
+                  <s.icon className="size-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{s.value}</div>
+                  <p className="text-xs text-muted-foreground">{s.delta}</p>
+                </CardContent>
+              </Card>
             ))}
-          </CardContent>
-        </Card>
+          </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Mantenciones próximas</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            {upcomingMaintenance.map((m, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between border-b last:border-0 pb-3 last:pb-0"
-              >
-                <div>
-                  <p className="font-medium">{m.equipo}</p>
-                  <p className="text-sm text-muted-foreground">{m.tipo}</p>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+            <Card className="lg:col-span-4">
+              <CardHeader>
+                <CardTitle>Vista general</CardTitle>
+              </CardHeader>
+              <CardContent className="pl-2">
+                <Suspense>
+                  <OverviewChart />
+                </Suspense>
+              </CardContent>
+            </Card>
+
+            <Card className="lg:col-span-3">
+              <CardHeader>
+                <CardTitle>Mantenciones próximas</CardTitle>
+                <CardDescription>
+                  Hay 5 mantenciones programadas o pendientes.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-6">
+                  {recentSales.map((s) => (
+                    <div key={s.name} className="flex items-center gap-4">
+                      <Avatar className="h-9 w-9">
+                        <AvatarFallback>
+                          {s.name.slice(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium leading-none truncate">
+                          {s.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {s.email}
+                        </p>
+                      </div>
+                      <div className="text-sm font-medium">{s.amount}</div>
+                    </div>
+                  ))}
                 </div>
-                <Badge variant={m.estado === 'Programada' ? 'default' : 'secondary'}>
-                  {m.estado}
-                </Badge>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

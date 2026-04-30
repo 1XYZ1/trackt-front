@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Geist_Mono, Inter } from 'next/font/google';
 import './globals.css';
 import { cn } from '@/lib/utils';
+import { ThemeProvider } from '@/components/theme-provider';
 
 const interSans = Inter({ subsets: ['latin'], variable: '--font-sans' });
 const interHeading = Inter({ subsets: ['latin'], variable: '--font-heading' });
@@ -29,7 +30,14 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-screen bg-background text-foreground font-sans">
-        {children}
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
+          {children}
+        </ThemeProvider>
       </body>
     </html>
   );
