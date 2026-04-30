@@ -1,16 +1,11 @@
 import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Geist_Mono, Inter } from 'next/font/google';
 import './globals.css';
+import { cn } from '@/lib/utils';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-});
+const interSans = Inter({ subsets: ['latin'], variable: '--font-sans' });
+const interHeading = Inter({ subsets: ['latin'], variable: '--font-heading' });
+const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-mono' });
 
 export const metadata: Metadata = {
   title: 'Trackt',
@@ -25,10 +20,15 @@ export default function RootLayout({
   return (
     <html
       lang="es"
-      className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      className={cn(
+        'antialiased',
+        interSans.variable,
+        interHeading.variable,
+        geistMono.variable,
+      )}
       suppressHydrationWarning
     >
-      <body className="min-h-screen bg-background text-foreground">
+      <body className="min-h-screen bg-background text-foreground font-sans">
         {children}
       </body>
     </html>
