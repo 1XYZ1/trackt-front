@@ -7,9 +7,19 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Truck, Wrench, CheckCircle2, AlertTriangle } from 'lucide-react';
+import {
+  Truck,
+  Wrench,
+  CheckCircle2,
+  AlertTriangle,
+  Server,
+  Database,
+  ShieldCheck,
+} from 'lucide-react';
 import { OverviewChart } from './overview-chart';
+import { apiGet, type ApiHealth, type ApiMe, type DbMessage } from '@/lib/api';
 
 const stats = [
   {
@@ -46,7 +56,13 @@ const recentSales = [
   { name: 'Retroexcavadora 420F', email: 'Engrase general', amount: 'Pendiente' },
 ];
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const [health, me, messages] = await Promise.all([
+    apiGet<ApiHealth>('/'),
+    apiGet<ApiMe>('/me', true),
+    apiGet<DbMessage[]>('/messages'),
+  ]);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -61,11 +77,9 @@ export default function DashboardPage() {
       <Tabs defaultValue="overview" className="space-y-4">
         <TabsList>
           <TabsTrigger value="overview">Vista general</TabsTrigger>
+          <TabsTrigger value="integrations">Integraciones</TabsTrigger>
           <TabsTrigger value="analytics" disabled>
             Analítica
-          </TabsTrigger>
-          <TabsTrigger value="reports" disabled>
-            Reportes
           </TabsTrigger>
         </TabsList>
 
@@ -126,6 +140,81 @@ export default function DashboardPage() {
                       <div className="text-sm font-medium">{s.amount}</div>
                     </div>
                   ))}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="integrations" className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Server className="size-4" />
+                  API (Railway)
+                </CardTitle>
+                <Badge variant={health ? 'default' : 'destructive'}>
+                  {health ? 'Online' : 'Offline'}
+                </Badge>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Respuesta de <code>GET /</code>:
+                </p>
+                <pre className="text-xs bg-muted rounded p-2 overflow-x-auto">
+                  {health ? JSON.stringify(health, null, 2) : 'Sin respuesta'}
+                </pre>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <ShieldCheck className="size-4" />
+                  JWT Auth (/me)
+                </CardTitle>
+                <Badge variant={me ? 'default' : 'destructive'}>
+                  {me ? 'Autenticado' : 'Sin token'}
+                </Badge>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Endpoint protegido por <code>AuthGuard</code>:
+                </p>
+                <pre className="text-xs bg-muted rounded p-2 overflow-x-auto">
+                  {me ? JSON.stringify(me, null, 2) : 'Sin respuesta'}
+                </pre>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Database className="size-4" />
+                  Supabase DB
+                </CardTitle>
+                <Badge variant={messages ? 'default' : 'destructive'}>
+                  {messages ? `${messages.length} filas` : 'Sin datos'}
+                </Badge>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Tabla <code>messages</code> vía API:
+                </p>
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {messages && messages.length > 0 ? (
+                    messages.map((m) => (
+                      <div key={m.id} className="text-xs border rounded p-2">
+                        <p className="font-medium">{m.text}</p>
+                        <p className="text-muted-foreground">
+                          {new Date(m.created_at).toLocaleString('es-CL')}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Sin filas</p>
+                  )}
                 </div>
               </CardContent>
             </Card>
