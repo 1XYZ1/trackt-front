@@ -3,8 +3,8 @@ import './globals.css';
 import { ThemeProvider } from '@/components/theme-provider';
 
 export const metadata: Metadata = {
-  title: 'Trackt',
-  description: 'Sistema de gestión de equipos y mantenciones',
+  title: 'Trackt System Design',
+  description: 'Demo SaaS industrial para mantenimiento minero.',
 };
 
 export default function RootLayout({
