@@ -68,7 +68,9 @@ describe('TicketsService', () => {
       otEstado = OrdenTrabajoEstado.PENDIENTE,
       lastCodigo = null as string | null,
     } = {}) {
-      prisma.ordenTrabajo.findFirst.mockResolvedValueOnce({
+      // findFirst se llama dos veces: una para validación previa y otra
+      // dentro de la TX para cerrar la ventana de carrera.
+      prisma.ordenTrabajo.findFirst.mockResolvedValue({
         id: OT_ID,
         estado: otEstado,
       });
@@ -207,7 +209,9 @@ describe('TicketsService', () => {
     });
 
     it('atomicidad: si falla updateMany de la OT, no se retorna ticket (rollback) y la creación ocurre dentro del callback transaccional', async () => {
-      prisma.ordenTrabajo.findFirst.mockResolvedValueOnce({
+      // Ambas lecturas de OT (la inicial fuera y la re-validación dentro de TX)
+      // devuelven el mismo estado PENDIENTE.
+      prisma.ordenTrabajo.findFirst.mockResolvedValue({
         id: OT_ID,
         estado: OrdenTrabajoEstado.PENDIENTE,
       });
@@ -271,6 +275,32 @@ describe('TicketsService', () => {
         expect(prisma.ticket.create).not.toHaveBeenCalled();
       },
     );
+
+    it('cierra ventana de carrera: si la OT pasa a CANCELADA entre las dos lecturas, lanza ConflictException dentro de la TX y no crea ticket', async () => {
+      // 1ª lectura (fuera de TX): la OT está PENDIENTE → pasa validación
+      // 2ª lectura (dentro de TX): la OT ya fue cancelada por otro proceso
+      prisma.ordenTrabajo.findFirst
+        .mockResolvedValueOnce({
+          id: OT_ID,
+          estado: OrdenTrabajoEstado.PENDIENTE,
+        })
+        .mockResolvedValueOnce({
+          id: OT_ID,
+          estado: OrdenTrabajoEstado.CANCELADA,
+        });
+
+      await expect(
+        service.createFromOrden(TENANT, USER, OT_ID, {
+          titulo: 't',
+          descripcion: 'd',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.ticket.create).not.toHaveBeenCalled();
+      expect(prisma.eventoEstadoTicket.create).not.toHaveBeenCalled();
+      expect(prisma.ordenTrabajo.updateMany).not.toHaveBeenCalled();
+    });
   });
 
   // ---------- findAll ----------

@@ -76,6 +76,25 @@ export class TicketsService {
         SELECT pg_advisory_xact_lock(hashtext(${lockKey}))
       `;
 
+      // Re-leer la OT dentro de la TX para cerrar la ventana de carrera
+      // entre la validación inicial y la creación del ticket. Si entre medio
+      // la OT fue cancelada/cerrada, abortamos antes de crear nada.
+      const otFresh = await tx.ordenTrabajo.findFirst({
+        where: { id: otId, tenantId },
+        select: { id: true, estado: true },
+      });
+      if (!otFresh) {
+        throw new NotFoundException(`Orden con id "${otId}" no encontrada`);
+      }
+      if (
+        otFresh.estado === OrdenTrabajoEstado.CERRADA ||
+        otFresh.estado === OrdenTrabajoEstado.CANCELADA
+      ) {
+        throw new ConflictException(
+          `No se puede crear ticket sobre una OT en estado ${otFresh.estado}`,
+        );
+      }
+
       const codigo = await this.nextCodigo(tx, tenantId, year);
 
       const ticket = await tx.ticket.create({
@@ -101,7 +120,7 @@ export class TicketsService {
         },
       });
 
-      if (ot.estado === OrdenTrabajoEstado.PENDIENTE) {
+      if (otFresh.estado === OrdenTrabajoEstado.PENDIENTE) {
         await tx.ordenTrabajo.updateMany({
           where: {
             id: otId,
