@@ -28,6 +28,7 @@ function buildPrismaMock() {
       updateMany: jest.fn(),
     },
     $queryRaw: jest.fn().mockResolvedValue([{}]),
+    $executeRaw: jest.fn().mockResolvedValue(0),
     $transaction: jest.fn(),
   };
 
@@ -129,7 +130,7 @@ describe('OrdenesService', () => {
       });
 
       expect(prisma.$transaction).toHaveBeenCalled();
-      expect(prisma.$queryRaw).toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalled();
     });
 
     it('falla si el equipo no existe en el tenant', async () => {

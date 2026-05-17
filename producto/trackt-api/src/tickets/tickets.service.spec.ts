@@ -40,6 +40,7 @@ function buildPrismaMock() {
       create: jest.fn(),
     },
     $queryRaw: jest.fn().mockResolvedValue([]),
+    $executeRaw: jest.fn().mockResolvedValue(0),
     $transaction: jest.fn(),
   };
 
@@ -288,7 +289,7 @@ describe('TicketsService', () => {
       });
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-      expect(prisma.$queryRaw).toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalled();
       const arg = prisma.$transaction.mock.calls[0][0];
       expect(typeof arg).toBe('function');
     });
@@ -381,13 +382,9 @@ describe('TicketsService', () => {
 
     it('mapea la respuesta al contrato del frontend (ordenId, equipo, mecanico, timeline)', async () => {
       mockCreateChain();
-      prisma.$queryRaw.mockImplementation(
-        async (strings: TemplateStringsArray) => {
-          const sql = strings.join('');
-          if (sql.includes('pg_advisory_xact_lock')) return [{}];
-          return [{ id: USER, full_name: 'Andrés Admin' }];
-        },
-      );
+      prisma.$queryRaw.mockResolvedValue([
+        { id: USER, full_name: 'Andrés Admin' },
+      ]);
 
       const result = await service.createFromOrden(TENANT, USER, OT_ID, {
         titulo: 'Falla motor',

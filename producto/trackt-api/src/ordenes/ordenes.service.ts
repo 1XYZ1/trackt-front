@@ -85,7 +85,9 @@ export class OrdenesService {
     const lockKey = `ot:${tenantId}:${year}`;
 
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw<unknown>`
+      // $executeRaw en vez de $queryRaw: pg_advisory_xact_lock retorna void
+      // y $queryRaw intenta deserializar la columna → P2010.
+      await tx.$executeRaw`
         SELECT pg_advisory_xact_lock(hashtext(${lockKey}))
       `;
 
