@@ -17,22 +17,14 @@ import {
 } from '../common/utils/pagination';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { ListTicketsQueryDto } from './dto/list-tickets-query.dto';
-
-const OT_SUMMARY_SELECT = {
-  id: true,
-  codigo: true,
-  estado: true,
-  equipoId: true,
-} satisfies Prisma.OrdenTrabajoSelect;
-
-const LIST_INCLUDE = {
-  ot: { select: OT_SUMMARY_SELECT },
-} satisfies Prisma.TicketInclude;
-
-const DETAIL_INCLUDE = {
-  ot: { select: OT_SUMMARY_SELECT },
-  eventos: { orderBy: { createdAt: 'asc' } },
-} satisfies Prisma.TicketInclude;
+import { TicketResponseDto, UsuarioResumenDto } from './dto/ticket-response.dto';
+import {
+  TICKET_DETAIL_INCLUDE,
+  TICKET_LIST_INCLUDE,
+  collectUserIds,
+  mapTicketDetail,
+  mapTicketListItem,
+} from './mappers/ticket.mapper';
 
 @Injectable()
 export class TicketsService {
@@ -51,7 +43,7 @@ export class TicketsService {
     userId: string,
     otId: string,
     dto: CreateTicketDto,
-  ) {
+  ): Promise<TicketResponseDto> {
     const ot = await this.prisma.ordenTrabajo.findFirst({
       where: { id: otId, tenantId },
       select: { id: true, estado: true },
@@ -71,7 +63,7 @@ export class TicketsService {
     const year = new Date().getUTCFullYear();
     const lockKey = `ticket:${tenantId}:${year}`;
 
-    return this.prisma.$transaction(async (tx) => {
+    const ticketRow = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw<unknown>`
         SELECT pg_advisory_xact_lock(hashtext(${lockKey}))
       `;
@@ -121,7 +113,7 @@ export class TicketsService {
       });
 
       if (otFresh.estado === OrdenTrabajoEstado.PENDIENTE) {
-        await tx.ordenTrabajo.updateMany({
+        const result = await tx.ordenTrabajo.updateMany({
           where: {
             id: otId,
             tenantId,
@@ -129,21 +121,30 @@ export class TicketsService {
           },
           data: { estado: OrdenTrabajoEstado.EN_PROCESO },
         });
+        // Si entre el re-read y este updateMany otro endpoint mutó la OT
+        // (ej. cancelar concurrente), count será 0 → abortar para no dejar
+        // ticket EN_PROCESO con OT en estado incoherente.
+        if (result.count !== 1) {
+          throw new ConflictException(
+            `OT ${otId} mutó concurrentemente — no se pudo transicionar a EN_PROCESO`,
+          );
+        }
       }
 
       return tx.ticket.findUniqueOrThrow({
         where: { id: ticket.id },
-        include: DETAIL_INCLUDE,
+        include: TICKET_DETAIL_INCLUDE,
       });
     });
+
+    const users = await this.fetchUserSummaries(collectUserIds([ticketRow]));
+    return mapTicketDetail(ticketRow, users);
   }
 
   async findAll(
     tenantId: string,
     query: ListTicketsQueryDto,
-  ): Promise<
-    PaginatedResult<Prisma.TicketGetPayload<{ include: typeof LIST_INCLUDE }>>
-  > {
+  ): Promise<PaginatedResult<TicketResponseDto>> {
     const { page = 1, limit = 10, estado, mecanicoId, otId } = query;
 
     const where: Prisma.TicketWhereInput = {
@@ -153,10 +154,10 @@ export class TicketsService {
       ...(otId && { otId }),
     };
 
-    const [data, total] = await this.prisma.$transaction([
+    const [rows, total] = await this.prisma.$transaction([
       this.prisma.ticket.findMany({
         where,
-        include: LIST_INCLUDE,
+        include: TICKET_LIST_INCLUDE,
         orderBy: { createdAt: 'desc' },
         skip: getPrismaSkip(page, limit),
         take: limit,
@@ -164,24 +165,31 @@ export class TicketsService {
       this.prisma.ticket.count({ where }),
     ]);
 
+    const users = await this.fetchUserSummaries(collectUserIds(rows));
+    const data = rows.map((row) => mapTicketListItem(row, users));
     return buildPaginatedResult(data, total, page, limit);
   }
 
-  async findOne(tenantId: string, id: string) {
+  async findOne(tenantId: string, id: string): Promise<TicketResponseDto> {
     const ticket = await this.prisma.ticket.findFirst({
       where: { id, tenantId },
-      include: DETAIL_INCLUDE,
+      include: TICKET_DETAIL_INCLUDE,
     });
     if (!ticket) {
       throw new NotFoundException(`Ticket con id "${id}" no encontrado`);
     }
-    return ticket;
+    const users = await this.fetchUserSummaries(collectUserIds([ticket]));
+    return mapTicketDetail(ticket, users);
   }
 
   /**
    * Calcula el siguiente código TKT-YYYY-NNNN para un tenant/año.
    * Asume estar dentro de la transacción con el advisory lock ya tomado.
    * Solo considera códigos que matcheen el formato TKT-YYYY-...
+   *
+   * LIMITACIÓN: ordenamiento lexicográfico funciona hasta 9999 tickets/año
+   * (padStart 4 mantiene ancho fijo). Si un tenant supera ese volumen anual,
+   * migrar a $queryRaw con parse explícito a int del suffix.
    */
   private async nextCodigo(
     tx: Prisma.TransactionClient,
@@ -205,5 +213,29 @@ export class TicketsService {
     }
 
     return `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  }
+
+  /**
+   * Batch fetch de resúmenes de usuario desde `public.profiles`.
+   * Patrón consistente con `auth/profile.service.ts` que también queriea
+   * profiles vía $queryRaw (la tabla no está modelada en prisma/schema.prisma).
+   *
+   * Email + avatarUrl viven en `auth.users` (managed by Supabase) — requieren
+   * admin API y se omiten por ahora. Frontend los maneja como opcionales.
+   */
+  private async fetchUserSummaries(
+    userIds: string[],
+  ): Promise<Map<string, UsuarioResumenDto>> {
+    if (userIds.length === 0) return new Map();
+    const rows = await this.prisma.$queryRaw<
+      Array<{ id: string; full_name: string | null }>
+    >`
+      SELECT id::text AS id, full_name
+      FROM public.profiles
+      WHERE id = ANY(${userIds}::uuid[])
+    `;
+    return new Map(
+      rows.map((r) => [r.id, { id: r.id, nombre: r.full_name }]),
+    );
   }
 }
