@@ -1,10 +1,13 @@
 'use client';
 
-import { Search } from 'lucide-react';
+import Link from 'next/link';
+import { LogOut, Search, UserCog } from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { ThemeSwitch } from '@/components/theme-switch';
+import { logout } from '@/app/actions/auth';
 import { cn } from '@/lib/utils';
 
 export function Header({ className }: { className?: string }) {
@@ -21,13 +24,25 @@ export function Header({ className }: { className?: string }) {
         <Separator orientation="vertical" className="mr-2 h-4" />
         <div className="relative flex-1 max-w-md">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Buscar..."
-            className="pl-8 h-9"
-          />
+          <Input placeholder="Buscar..." className="pl-8 h-9" />
         </div>
         <div className="ml-auto flex items-center gap-2">
           <ThemeSwitch />
+          <Separator orientation="vertical" className="h-5" />
+          <Button
+            render={<Link href="/configuracion/perfil" />}
+            variant="ghost"
+            size="sm"
+          >
+            <UserCog className="size-4" />
+            <span className="hidden sm:inline">Mi perfil</span>
+          </Button>
+          <form action={logout}>
+            <Button type="submit" variant="outline" size="sm">
+              <LogOut className="size-4" />
+              <span className="hidden sm:inline">Cerrar sesion</span>
+            </Button>
+          </form>
         </div>
       </div>
     </header>

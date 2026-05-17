@@ -3,12 +3,8 @@ import {
   Truck,
   Wrench,
   ClipboardList,
-  AlertTriangle,
+  Ticket,
   Users,
-  Settings,
-  HelpCircle,
-  Bell,
-  Palette,
   UserCog,
   Command,
 } from 'lucide-react';
@@ -29,8 +25,8 @@ export const sidebarData: SidebarData = {
         { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard },
         { title: 'Equipos', url: '/equipos', icon: Truck },
         { title: 'Mantenciones', url: '/mantenciones', icon: Wrench },
-        { title: 'Ordenes', url: '/ordenes-trabajo', icon: ClipboardList },
-        { title: 'Alertas', url: '/alertas', icon: AlertTriangle },
+        { title: 'Ordenes', url: '/ordenes', icon: ClipboardList },
+        { title: 'Tickets', url: '/tickets', icon: Ticket },
       ],
     },
     {
@@ -41,18 +37,9 @@ export const sidebarData: SidebarData = {
       ],
     },
     {
-      title: 'Otros',
+      title: 'Cuenta',
       items: [
-        {
-          title: 'Configuracion',
-          icon: Settings,
-          items: [
-            { title: 'Perfil', url: '/configuracion/perfil', icon: UserCog },
-            { title: 'Apariencia', url: '/configuracion/apariencia', icon: Palette },
-            { title: 'Notificaciones', url: '/configuracion/notificaciones', icon: Bell },
-          ],
-        },
-        { title: 'Ayuda', url: '/ayuda', icon: HelpCircle },
+        { title: 'Mi perfil', url: '/configuracion/perfil', icon: UserCog },
       ],
     },
   ],
