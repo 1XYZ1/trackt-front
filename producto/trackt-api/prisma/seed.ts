@@ -311,13 +311,13 @@ async function seedUsers() {
       id: u.id,
     });
 
-    if (error && !/already (registered|exists)/i.test(error.message)) {
+    if (error && !/already/i.test(error.message)) {
       throw new Error(`createUser ${u.email}: ${error.message}`);
     }
 
     await prisma.$executeRaw`
       INSERT INTO public.profiles (id, full_name, role, tenant_id)
-      VALUES (${u.id}::uuid, ${u.fullName}, ${u.role}, ${TENANT_ID})
+      VALUES (${u.id}::uuid, ${u.fullName}, ${u.role}::user_role, ${TENANT_ID})
       ON CONFLICT (id) DO UPDATE
         SET full_name = EXCLUDED.full_name,
             role      = EXCLUDED.role,
