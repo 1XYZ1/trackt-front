@@ -13,8 +13,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
 import { useTickets } from "@/hooks/use-tickets";
-import type { TicketTrabajo } from "@/lib/api/tickets";
+import { getTicketEquipoLabel, type TicketTrabajo } from "@/lib/api/tickets";
 import { cn } from "@/lib/utils";
 
 export type TicketsSearchParams = {
@@ -51,18 +52,10 @@ function estadoLabel(estado: "TODOS" | TicketEstado) {
   return estado.charAt(0) + estado.slice(1).toLowerCase();
 }
 
-function getEquipoLabel(ticket: TicketTrabajo) {
-  if (ticket.equipo) {
-    return `${ticket.equipo.codigo} - ${ticket.equipo.nombre}`;
-  }
-
-  return ticket.equipoNombre ?? "Equipo sin informacion";
-}
-
 function toTicketResumen(ticket: TicketTrabajo): TicketResumen {
   return {
     codigo: ticket.codigo,
-    equipo: getEquipoLabel(ticket),
+    equipo: getTicketEquipoLabel(ticket),
     estado: ticket.estado,
     mecanico: ticket.mecanico,
     titulo: ticket.titulo,
@@ -141,6 +134,8 @@ export function TicketsClient({
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
+  const debouncedUpdateFilter = useDebouncedCallback(updateFilter, 300);
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -176,7 +171,9 @@ export function TicketsClient({
               <Input
                 className="pl-7"
                 defaultValue={filters.q}
-                onChange={(event) => updateFilter("q", event.target.value)}
+                onChange={(event) =>
+                  debouncedUpdateFilter("q", event.target.value)
+                }
                 placeholder="Buscar codigo o titulo"
                 type="search"
               />
@@ -185,8 +182,8 @@ export function TicketsClient({
 
           <div className="grid gap-3 xl:grid-cols-[1.2fr_0.7fr_0.7fr]">
             <div className="flex flex-wrap gap-1.5">
-              {estados.map((estado) => {
-                const active = (filters.estado || "TODOS") === estado;
+              {estados.map((estadoOption) => {
+                const active = (filters.estado || "TODOS") === estadoOption;
 
                 return (
                   <button
@@ -196,23 +193,27 @@ export function TicketsClient({
                         ? "bg-brand-primary text-brand-primary-foreground"
                         : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground",
                     )}
-                    key={estado}
-                    onClick={() => updateFilter("estado", estado)}
+                    key={estadoOption}
+                    onClick={() => updateFilter("estado", estadoOption)}
                     type="button"
                   >
-                    {estadoLabel(estado)}
+                    {estadoLabel(estadoOption)}
                   </button>
                 );
               })}
             </div>
             <Input
               defaultValue={filters.mecanico}
-              onChange={(event) => updateFilter("mecanico", event.target.value)}
+              onChange={(event) =>
+                debouncedUpdateFilter("mecanico", event.target.value)
+              }
               placeholder="Filtrar por mecanico"
             />
             <Input
               defaultValue={filters.ot}
-              onChange={(event) => updateFilter("ot", event.target.value)}
+              onChange={(event) =>
+                debouncedUpdateFilter("ot", event.target.value)
+              }
               placeholder="Filtrar por OT"
             />
           </div>

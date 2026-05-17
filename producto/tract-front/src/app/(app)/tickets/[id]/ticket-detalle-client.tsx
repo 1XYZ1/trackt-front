@@ -17,15 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useTicket } from "@/hooks/use-tickets";
-import type { TicketTimelineEvent, TicketTrabajo } from "@/lib/api/tickets";
-
-function getEquipoLabel(ticket: TicketTrabajo) {
-  if (ticket.equipo) {
-    return `${ticket.equipo.codigo} - ${ticket.equipo.nombre}`;
-  }
-
-  return ticket.equipoNombre ?? "Equipo sin informacion";
-}
+import { getTicketEquipoLabel, type TicketTimelineEvent } from "@/lib/api/tickets";
 
 function toTimelineEvento(evento: TicketTimelineEvent): TimelineEvento {
   const title = evento.estadoAnterior
@@ -98,6 +90,7 @@ export function TicketDetalleClient({ id }: { id: string }) {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {/* TODO(UI-05): wire estado/reasignar a endpoints reales */}
           <Button
             onClick={() => toast.info("Accion disponible en UI-05/UI-06")}
             size="sm"
@@ -142,7 +135,7 @@ export function TicketDetalleClient({ id }: { id: string }) {
                 <Wrench className="size-3.5" />
                 Equipo
               </div>
-              <p className="mt-1 font-medium text-sm">{getEquipoLabel(ticket)}</p>
+              <p className="mt-1 font-medium text-sm">{getTicketEquipoLabel(ticket)}</p>
             </div>
 
             <div className="rounded-lg border border-border/50 bg-secondary/20 p-3">

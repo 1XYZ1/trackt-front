@@ -54,6 +54,14 @@ async function parseJsonResponse<T>(
   return response.json();
 }
 
+export function getTicketEquipoLabel(ticket: TicketTrabajo): string {
+  if (ticket.equipo) {
+    return `${ticket.equipo.codigo} - ${ticket.equipo.nombre}`;
+  }
+
+  return ticket.equipoNombre ?? "Equipo sin informacion";
+}
+
 export async function getTickets(): Promise<TicketTrabajo[]> {
   assertApiBaseUrl();
 
