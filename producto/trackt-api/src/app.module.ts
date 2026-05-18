@@ -9,6 +9,7 @@ import { UsuariosModule } from './usuarios/usuarios.module';
 import { OrdenesModule } from './ordenes/ordenes.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { EvidenciasModule } from './evidencias/evidencias.module';
+import { NotificacionesModule } from './notificaciones/notificaciones.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { EvidenciasModule } from './evidencias/evidencias.module';
     OrdenesModule,
     TicketsModule,
     EvidenciasModule,
+    NotificacionesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
