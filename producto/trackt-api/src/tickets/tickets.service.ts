@@ -229,7 +229,7 @@ export class TicketsService {
     }
 
     const now = new Date();
-    return this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       await tx.ticket.update({
         where: { id: ticketId },
         data: {
@@ -247,8 +247,8 @@ export class TicketsService {
         userId,
         'Asignado a mecánico',
       );
-      return this.buildResponse(tx, ticketId);
     });
+    return this.findOne(tenantId, ticketId);
   }
 
   /**
@@ -272,7 +272,7 @@ export class TicketsService {
     }
 
     const now = new Date();
-    return this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       await tx.ticket.update({
         where: { id: ticketId },
         data: {
@@ -288,8 +288,8 @@ export class TicketsService {
         userId,
         'Inicio de ejecución',
       );
-      return this.buildResponse(tx, ticketId);
     });
+    return this.findOne(tenantId, ticketId);
   }
 
   /**
@@ -314,7 +314,7 @@ export class TicketsService {
     }
 
     const now = new Date();
-    return this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       await tx.ticket.update({
         where: { id: ticketId },
         data: {
@@ -330,8 +330,8 @@ export class TicketsService {
         userId,
         dto.observacion ?? 'Ejecución finalizada',
       );
-      return this.buildResponse(tx, ticketId);
     });
+    return this.findOne(tenantId, ticketId);
   }
 
   /**
