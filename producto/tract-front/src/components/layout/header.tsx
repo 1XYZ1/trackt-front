@@ -7,6 +7,7 @@ import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ThemeSwitch } from '@/components/theme-switch';
+import { NotificacionesBell } from '@/components/layout/notificaciones-bell';
 import { logout } from '@/app/actions/auth';
 import { cn } from '@/lib/utils';
 
@@ -28,6 +29,7 @@ export function Header({ className }: { className?: string }) {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <ThemeSwitch />
+          <NotificacionesBell />
           <Separator orientation="vertical" className="h-5" />
           <Button
             render={<Link href="/configuracion/perfil" />}
