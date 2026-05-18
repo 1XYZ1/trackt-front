@@ -21,13 +21,51 @@ export const sidebarData: SidebarData = {
   ],
   navGroups: [
     {
-      title: 'General',
+      title: 'Mi trabajo',
+      roles: ['mechanic'],
       items: [
-        { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard },
-        { title: 'Equipos', url: '/equipos', icon: Truck },
-        { title: 'Mantenciones', url: '/mantenciones', icon: Wrench },
-        { title: 'Ordenes', url: '/ordenes', icon: ClipboardList },
-        { title: 'Tickets', url: '/tickets', icon: Ticket },
+        {
+          title: 'Mis tickets',
+          url: '/mis-tickets',
+          icon: Ticket,
+          roles: ['mechanic'],
+        },
+      ],
+    },
+    {
+      title: 'General',
+      roles: ['admin'],
+      items: [
+        {
+          title: 'Dashboard',
+          url: '/dashboard',
+          icon: LayoutDashboard,
+          roles: ['admin'],
+        },
+        {
+          title: 'Equipos',
+          url: '/equipos',
+          icon: Truck,
+          roles: ['admin'],
+        },
+        {
+          title: 'Mantenciones',
+          url: '/mantenciones',
+          icon: Wrench,
+          roles: ['admin'],
+        },
+        {
+          title: 'Ordenes',
+          url: '/ordenes',
+          icon: ClipboardList,
+          roles: ['admin'],
+        },
+        {
+          title: 'Tickets',
+          url: '/tickets',
+          icon: Ticket,
+          roles: ['admin'],
+        },
       ],
     },
     {
