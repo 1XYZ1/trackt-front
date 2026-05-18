@@ -22,7 +22,7 @@ import {
 import { NotificacionesService } from '../notificaciones/notificaciones.service';
 import { OrdenesService } from '../ordenes/ordenes.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
-import { ListTicketsQueryDto } from './dto/list-tickets-query.dto';
+import { ResolvedTicketsFilters } from './dto/list-tickets-query.dto';
 import { AsignarTicketDto } from './dto/asignar-ticket.dto';
 import { FinalizarTicketDto } from './dto/finalizar-ticket.dto';
 import { ValidarTicketDto } from './dto/validar-ticket.dto';
@@ -35,6 +35,17 @@ import {
   mapTicketDetail,
   mapTicketListItem,
 } from './mappers/ticket.mapper';
+import { UserRole } from '../auth/types';
+
+/**
+ * Mínimo subset de AuthUser que cada transición necesita: id del actor +
+ * su rol, para que el service haga defensa en profundidad (no depender solo
+ * del RolesGuard del controller).
+ */
+export interface TicketActor {
+  id: string;
+  role: UserRole;
+}
 
 @Injectable()
 export class TicketsService {
@@ -160,7 +171,7 @@ export class TicketsService {
 
   async findAll(
     tenantId: string,
-    query: ListTicketsQueryDto,
+    query: ResolvedTicketsFilters,
   ): Promise<PaginatedResult<TicketResponseDto>> {
     const { page = 1, limit = 10, estado, mecanicoId, otId } = query;
 
@@ -202,14 +213,15 @@ export class TicketsService {
   // ---------- Transiciones de estado (TRA-27) ----------
 
   /**
-   * Asignar mecánico a ticket. Solo admin. PENDIENTE → ASIGNADO.
+   * Asignar mecánico a ticket. Solo admin (jefe de taller). PENDIENTE → ASIGNADO.
    */
   async asignar(
     tenantId: string,
-    userId: string,
+    actor: TicketActor,
     ticketId: string,
     dto: AsignarTicketDto,
   ): Promise<TicketResponseDto> {
+    this.assertRole(actor, 'admin', 'asignar');
     const ticket = await this.requireTicket(tenantId, ticketId);
     if (ticket.estado !== TicketEstado.PENDIENTE) {
       throw new ConflictException(
@@ -238,7 +250,7 @@ export class TicketsService {
         data: {
           estado: TicketEstado.ASIGNADO,
           mecanicoId: dto.mecanicoId,
-          jefeId: ticket.jefeId ?? userId,
+          jefeId: ticket.jefeId ?? actor.id,
           fechaAsignacion: now,
         },
       });
@@ -247,7 +259,7 @@ export class TicketsService {
         ticketId,
         ticket.estado,
         TicketEstado.ASIGNADO,
-        userId,
+        actor.id,
         'Asignado a mecánico',
       );
     });
@@ -272,16 +284,17 @@ export class TicketsService {
    */
   async iniciar(
     tenantId: string,
-    userId: string,
+    actor: TicketActor,
     ticketId: string,
   ): Promise<TicketResponseDto> {
+    this.assertRole(actor, 'mechanic', 'iniciar');
     const ticket = await this.requireTicket(tenantId, ticketId);
     if (ticket.estado !== TicketEstado.ASIGNADO) {
       throw new ConflictException(
         `Solo se puede iniciar un ticket en estado ASIGNADO (actual: ${ticket.estado})`,
       );
     }
-    if (ticket.mecanicoId !== userId) {
+    if (ticket.mecanicoId !== actor.id) {
       throw new ForbiddenException(
         'Solo el mecánico asignado puede iniciar el ticket',
       );
@@ -301,7 +314,7 @@ export class TicketsService {
         ticketId,
         ticket.estado,
         TicketEstado.EN_EJECUCION,
-        userId,
+        actor.id,
         'Inicio de ejecución',
       );
     });
@@ -328,17 +341,18 @@ export class TicketsService {
    */
   async finalizar(
     tenantId: string,
-    userId: string,
+    actor: TicketActor,
     ticketId: string,
     dto: FinalizarTicketDto,
   ): Promise<TicketResponseDto> {
+    this.assertRole(actor, 'mechanic', 'finalizar');
     const ticket = await this.requireTicket(tenantId, ticketId);
     if (ticket.estado !== TicketEstado.EN_EJECUCION) {
       throw new ConflictException(
         `Solo se puede finalizar un ticket en estado EN_EJECUCION (actual: ${ticket.estado})`,
       );
     }
-    if (ticket.mecanicoId !== userId) {
+    if (ticket.mecanicoId !== actor.id) {
       throw new ForbiddenException(
         'Solo el mecánico asignado puede finalizar el ticket',
       );
@@ -358,7 +372,7 @@ export class TicketsService {
         ticketId,
         ticket.estado,
         TicketEstado.EJECUTADO,
-        userId,
+        actor.id,
         dto.observacion ?? 'Ejecución finalizada',
       );
     });
@@ -381,16 +395,17 @@ export class TicketsService {
   }
 
   /**
-   * Validar ticket EJECUTADO. Solo admin.
+   * Validar ticket EJECUTADO. Solo admin (jefe de taller).
    * - aprobado=true  → CERRADO + cascada OT (puede cerrar la OT).
    * - aprobado=false → vuelve a EN_EJECUCION (re-trabajo); limpia fechaFinEjecucion.
    */
   async validar(
     tenantId: string,
-    userId: string,
+    actor: TicketActor,
     ticketId: string,
     dto: ValidarTicketDto,
   ): Promise<TicketResponseDto> {
+    this.assertRole(actor, 'admin', 'validar');
     const ticket = await this.requireTicket(tenantId, ticketId);
     if (ticket.estado !== TicketEstado.EJECUTADO) {
       throw new ConflictException(
@@ -423,7 +438,7 @@ export class TicketsService {
         ticketId,
         ticket.estado,
         nuevoEstado,
-        userId,
+        actor.id,
         dto.observacion ??
           (dto.aprobado ? 'Validado y cerrado' : 'Rechazado, vuelve a ejecución'),
       );
@@ -464,10 +479,11 @@ export class TicketsService {
    */
   async cerrar(
     tenantId: string,
-    userId: string,
+    actor: TicketActor,
     ticketId: string,
     dto: CerrarTicketDto,
   ): Promise<TicketResponseDto> {
+    this.assertRole(actor, 'admin', 'cerrar');
     const ticket = await this.requireTicket(tenantId, ticketId);
     if (ticket.estado !== TicketEstado.EJECUTADO) {
       throw new ConflictException(
@@ -490,7 +506,7 @@ export class TicketsService {
         ticketId,
         ticket.estado,
         TicketEstado.CERRADO,
-        userId,
+        actor.id,
         dto.observacion ?? 'Cierre formal',
       );
     });
@@ -518,6 +534,24 @@ export class TicketsService {
   }
 
   // ---------- Helpers privados ----------
+
+  /**
+   * Defensa en profundidad: aunque RolesGuard ya filtra a nivel HTTP, el
+   * service también valida el rol del actor antes de mutar estado. Garantiza
+   * que llamadas internas (cron, scripts, otro service) tampoco salten el
+   * control de acceso.
+   */
+  private assertRole(
+    actor: TicketActor,
+    required: UserRole,
+    action: string,
+  ): void {
+    if (actor.role !== required) {
+      throw new ForbiddenException(
+        `Acción "${action}" requiere rol "${required}" (actor tiene "${actor.role}")`,
+      );
+    }
+  }
 
   private async requireTicket(tenantId: string, ticketId: string) {
     const ticket = await this.prisma.ticket.findFirst({

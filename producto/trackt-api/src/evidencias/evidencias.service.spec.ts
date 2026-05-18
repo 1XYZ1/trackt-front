@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   NotFoundException,
   PayloadTooLargeException,
@@ -89,6 +90,40 @@ describe('EvidenciasService', () => {
       );
     });
 
+    it('usa el bucket "evidencias" al pedir el signed upload URL', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: null,
+      });
+      storageApi.createSignedUploadUrl.mockResolvedValue({
+        data: { signedUrl: 'u', token: 't' },
+        error: null,
+      });
+      const bucketSpy = jest.fn().mockReturnValue(storageApi);
+      supabase.getAdminClient.mockReturnValue({ storage: { from: bucketSpy } });
+
+      await service.requestUploadUrl(TENANT, ADMIN, TICKET_ID, dto);
+      expect(bucketSpy).toHaveBeenCalledWith('evidencias');
+    });
+
+    it('expiresIn refleja el TTL declarado (60s) que el contrato expone al frontend', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: null,
+      });
+      storageApi.createSignedUploadUrl.mockResolvedValue({
+        data: { signedUrl: 'u', token: 't' },
+        error: null,
+      });
+      const result = await service.requestUploadUrl(
+        TENANT,
+        ADMIN,
+        TICKET_ID,
+        dto,
+      );
+      expect(result.expiresIn).toBe(60);
+    });
+
     it('mechanic asignado: ok', async () => {
       prisma.ticket.findFirst.mockResolvedValue({
         id: TICKET_ID,
@@ -141,7 +176,12 @@ describe('EvidenciasService', () => {
         mecanicoId: ADMIN.id,
       });
       storageApi.list.mockResolvedValue({
-        data: [{ name: 'abc.jpg' }],
+        data: [
+          {
+            name: 'abc.jpg',
+            metadata: { size: 1234, mimetype: 'image/jpeg' },
+          },
+        ],
         error: null,
       });
       prisma.evidencia.create.mockResolvedValue({
@@ -200,6 +240,116 @@ describe('EvidenciasService', () => {
         }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
+
+    it('path traversal con ".." → Forbidden', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: ADMIN.id,
+      });
+      await expect(
+        service.confirmUpload(TENANT, ADMIN, TICKET_ID, {
+          storagePath: `${TENANT}/${TICKET_ID}/../../etc/passwd.jpg`,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(storageApi.list).not.toHaveBeenCalled();
+    });
+
+    it('storagePath con backslash → Forbidden', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: ADMIN.id,
+      });
+      await expect(
+        service.confirmUpload(TENANT, ADMIN, TICKET_ID, {
+          storagePath: `${TENANT}\\${TICKET_ID}\\abc.jpg`,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('storagePath con subdirs extra (más de 3 segmentos) → Forbidden', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: ADMIN.id,
+      });
+      await expect(
+        service.confirmUpload(TENANT, ADMIN, TICKET_ID, {
+          storagePath: `${TENANT}/${TICKET_ID}/sub/abc.jpg`,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('extensión no permitida (.exe) → BadRequest', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: ADMIN.id,
+      });
+      await expect(
+        service.confirmUpload(TENANT, ADMIN, TICKET_ID, {
+          storagePath: `${TENANT}/${TICKET_ID}/malware.exe`,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('Storage reporta MIME real distinto al permitido → BadRequest', async () => {
+      const storagePath = `${TENANT}/${TICKET_ID}/abc.jpg`;
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: ADMIN.id,
+      });
+      storageApi.list.mockResolvedValue({
+        data: [
+          {
+            name: 'abc.jpg',
+            metadata: { size: 1000, mimetype: 'application/octet-stream' },
+          },
+        ],
+        error: null,
+      });
+
+      await expect(
+        service.confirmUpload(TENANT, ADMIN, TICKET_ID, { storagePath }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.evidencia.create).not.toHaveBeenCalled();
+    });
+
+    it('Storage reporta size real > 5MB → PayloadTooLarge', async () => {
+      const storagePath = `${TENANT}/${TICKET_ID}/abc.jpg`;
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: ADMIN.id,
+      });
+      storageApi.list.mockResolvedValue({
+        data: [
+          {
+            name: 'abc.jpg',
+            metadata: {
+              size: MAX_BYTES + 100,
+              mimetype: 'image/jpeg',
+            },
+          },
+        ],
+        error: null,
+      });
+
+      await expect(
+        service.confirmUpload(TENANT, ADMIN, TICKET_ID, { storagePath }),
+      ).rejects.toBeInstanceOf(PayloadTooLargeException);
+      expect(prisma.evidencia.create).not.toHaveBeenCalled();
+    });
+
+    it('mechanic no asignado intenta confirmar: Forbidden (sin pegarle a Storage)', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: 'otro-mec',
+      });
+
+      await expect(
+        service.confirmUpload(TENANT, MEC, TICKET_ID, {
+          storagePath: `${TENANT}/${TICKET_ID}/abc.jpg`,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(storageApi.list).not.toHaveBeenCalled();
+    });
   });
 
   describe('listForTicket', () => {
@@ -235,6 +385,45 @@ describe('EvidenciasService', () => {
 
       expect(result).toHaveLength(2);
       expect(result[0].downloadUrl).toBe('https://x/d');
+    });
+
+    it('createSignedUrl se llama con TTL 300s (5min) — contrato de download', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: ADMIN.id,
+      });
+      prisma.evidencia.findMany.mockResolvedValue([
+        {
+          id: 'ev-1',
+          ticketId: TICKET_ID,
+          storagePath: `${TENANT}/${TICKET_ID}/a.jpg`,
+          descripcion: null,
+          subidoPorId: ADMIN.id,
+          createdAt: new Date(),
+        },
+      ]);
+      storageApi.createSignedUrl.mockResolvedValue({
+        data: { signedUrl: 'u' },
+        error: null,
+      });
+
+      await service.listForTicket(TENANT, ADMIN, TICKET_ID);
+
+      // signature: createSignedUrl(path, expiresInSeconds)
+      const args = storageApi.createSignedUrl.mock.calls[0];
+      expect(args[1]).toBe(300);
+    });
+
+    it('mechanic no asignado al listar → Forbidden (no consulta evidencias)', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: TICKET_ID,
+        mecanicoId: 'otro-mec',
+      });
+
+      await expect(
+        service.listForTicket(TENANT, MEC, TICKET_ID),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.evidencia.findMany).not.toHaveBeenCalled();
     });
 
     it('mechanic no asignado: Forbidden', async () => {

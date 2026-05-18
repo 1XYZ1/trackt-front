@@ -63,6 +63,14 @@ const USER = 'user-admin';
 const OT_ID = 'ot-1';
 const TICKET_ID = 'tk-1';
 
+// Actores reutilizados por los tests de transiciones. Modelan el contrato
+// nuevo del service (TicketActor = {id, role}).
+const ADMIN_ACTOR = { id: USER, role: 'admin' as const };
+const MEC_ACTOR_OTHER = { id: 'otro-mec-id', role: 'mechanic' as const };
+function mechActor(id: string) {
+  return { id, role: 'mechanic' as const };
+}
+
 function fakeEquipo() {
   return {
     id: 'eq-1',
@@ -296,6 +304,73 @@ describe('TicketsService', () => {
       expect(prisma.$executeRaw).toHaveBeenCalled();
       const arg = prisma.$transaction.mock.calls[0][0];
       expect(typeof arg).toBe('function');
+    });
+
+    it('rollback (integración-light): si updateMany falla, el ticket creado dentro del callback NO queda persistido en el estado simulado', async () => {
+      // Mini-Prisma con snapshot/restore en $transaction: simula la semántica
+      // de rollback de Postgres (todo o nada) sin requerir DB real. Si el
+      // callback lanza, el estado se restaura al snapshot pre-TX.
+      const state = {
+        tickets: [] as Array<{ id: string; estado: string }>,
+        eventos: [] as Array<{ ticketId: string }>,
+      };
+      const fakeTx = {
+        ordenTrabajo: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: OT_ID,
+            estado: OrdenTrabajoEstado.PENDIENTE,
+          }),
+          updateMany: jest
+            .fn()
+            .mockRejectedValue(new Error('DB write conflict')),
+        },
+        ticket: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockImplementation(({ data }) => {
+            const row = { id: TICKET_ID, ...data };
+            state.tickets.push(row);
+            return Promise.resolve(row);
+          }),
+          findUniqueOrThrow: jest.fn(),
+        },
+        eventoEstadoTicket: {
+          create: jest.fn().mockImplementation(({ data }) => {
+            state.eventos.push(data);
+            return Promise.resolve({ id: 'evt-1' });
+          }),
+        },
+        $executeRaw: jest.fn().mockResolvedValue(0),
+      };
+
+      prisma.ordenTrabajo.findFirst.mockResolvedValueOnce({
+        id: OT_ID,
+        estado: OrdenTrabajoEstado.PENDIENTE,
+      });
+      prisma.$transaction.mockImplementationOnce(async (cb: unknown) => {
+        const snapshot = {
+          tickets: [...state.tickets],
+          eventos: [...state.eventos],
+        };
+        try {
+          return await (cb as (tx: typeof fakeTx) => Promise<unknown>)(fakeTx);
+        } catch (err) {
+          // rollback: restaurar estado pre-TX
+          state.tickets = snapshot.tickets;
+          state.eventos = snapshot.eventos;
+          throw err;
+        }
+      });
+
+      await expect(
+        service.createFromOrden(TENANT, USER, OT_ID, {
+          titulo: 't',
+          descripcion: 'd',
+        }),
+      ).rejects.toThrow(/DB write conflict/);
+
+      // Tras el rollback NO debe quedar ticket ni evento huérfano.
+      expect(state.tickets).toEqual([]);
+      expect(state.eventos).toEqual([]);
     });
 
     it('atomicidad: si falla updateMany de la OT, no se retorna ticket (rollback) y la creación ocurre dentro del callback transaccional', async () => {
@@ -593,7 +668,7 @@ describe('TicketsService', () => {
       prisma.ticket.update.mockResolvedValue({});
       prisma.eventoEstadoTicket.create.mockResolvedValue({});
 
-      await service.asignar(TENANT, USER, TICKET_ID, dto);
+      await service.asignar(TENANT, ADMIN_ACTOR, TICKET_ID, dto);
 
       const updateArgs = prisma.ticket.update.mock.calls[0][0];
       expect(updateArgs.data.estado).toBe(TicketEstado.ASIGNADO);
@@ -601,11 +676,25 @@ describe('TicketsService', () => {
       expect(prisma.eventoEstadoTicket.create).toHaveBeenCalled();
     });
 
+    it('guarda mecanicoId, jefeId y fechaAsignacion en la fila', async () => {
+      mockTicket(TicketEstado.PENDIENTE);
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: MEC }]);
+      prisma.ticket.update.mockResolvedValue({});
+      prisma.eventoEstadoTicket.create.mockResolvedValue({});
+
+      await service.asignar(TENANT, ADMIN_ACTOR, TICKET_ID, dto);
+
+      const updateArgs = prisma.ticket.update.mock.calls[0][0];
+      expect(updateArgs.data.mecanicoId).toBe(MEC);
+      expect(updateArgs.data.jefeId).toBe(USER); // si el ticket no tenía jefe, asume el actor
+      expect(updateArgs.data.fechaAsignacion).toBeInstanceOf(Date);
+    });
+
     it('falla con Conflict si ticket no está PENDIENTE', async () => {
       mockTicket(TicketEstado.ASIGNADO);
 
       await expect(
-        service.asignar(TENANT, USER, TICKET_ID, dto),
+        service.asignar(TENANT, ADMIN_ACTOR, TICKET_ID, dto),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -614,30 +703,53 @@ describe('TicketsService', () => {
       prisma.$queryRaw.mockResolvedValueOnce([]); // mecanico no encontrado
 
       await expect(
-        service.asignar(TENANT, USER, TICKET_ID, dto),
+        service.asignar(TENANT, ADMIN_ACTOR, TICKET_ID, dto),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('mechanic intentando asignar → ForbiddenException (defensa en profundidad)', async () => {
+      // RolesGuard ya filtra a nivel HTTP, pero el service también valida.
+      await expect(
+        service.asignar(TENANT, mechActor(MEC), TICKET_ID, dto),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.ticket.findFirst).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
+    it('usa prisma.$transaction para asignar (atomicidad update + evento)', async () => {
+      mockTicket(TicketEstado.PENDIENTE);
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: MEC }]);
+      prisma.ticket.update.mockResolvedValue({});
+      prisma.eventoEstadoTicket.create.mockResolvedValue({});
+
+      await service.asignar(TENANT, ADMIN_ACTOR, TICKET_ID, dto);
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const arg = prisma.$transaction.mock.calls[0][0];
+      expect(typeof arg).toBe('function');
     });
   });
 
   describe('iniciar', () => {
     const MEC = '00000000-0000-0000-0000-000000000099';
 
-    it('happy path: mecanico asignado inicia ejecucion', async () => {
+    it('happy path: mecanico asignado inicia ejecucion y guarda fechaInicioEjecucion', async () => {
       mockTicket(TicketEstado.ASIGNADO, MEC);
       prisma.ticket.update.mockResolvedValue({});
       prisma.eventoEstadoTicket.create.mockResolvedValue({});
 
-      await service.iniciar(TENANT, MEC, TICKET_ID);
+      await service.iniciar(TENANT, mechActor(MEC), TICKET_ID);
 
       const updateArgs = prisma.ticket.update.mock.calls[0][0];
       expect(updateArgs.data.estado).toBe(TicketEstado.EN_EJECUCION);
+      expect(updateArgs.data.fechaInicioEjecucion).toBeInstanceOf(Date);
     });
 
     it('falla con Forbidden si el caller no es el mecanico asignado', async () => {
       mockTicket(TicketEstado.ASIGNADO, MEC);
 
       await expect(
-        service.iniciar(TENANT, 'otro-user', TICKET_ID),
+        service.iniciar(TENANT, MEC_ACTOR_OTHER, TICKET_ID),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
@@ -645,31 +757,72 @@ describe('TicketsService', () => {
       mockTicket(TicketEstado.PENDIENTE, MEC);
 
       await expect(
-        service.iniciar(TENANT, MEC, TICKET_ID),
+        service.iniciar(TENANT, mechActor(MEC), TICKET_ID),
       ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('admin intentando iniciar (aunque sea mecanicoId del ticket) → ForbiddenException', async () => {
+      // Defensa en profundidad: aunque su id coincida con el mecanico
+      // asignado, su rol "admin" lo bloquea antes de cualquier mutación.
+      await expect(
+        service.iniciar(TENANT, { id: MEC, role: 'admin' }, TICKET_ID),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.ticket.findFirst).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
+    it('usa prisma.$transaction para iniciar', async () => {
+      mockTicket(TicketEstado.ASIGNADO, MEC);
+      prisma.ticket.update.mockResolvedValue({});
+      prisma.eventoEstadoTicket.create.mockResolvedValue({});
+
+      await service.iniciar(TENANT, mechActor(MEC), TICKET_ID);
+
+      expect(prisma.$transaction).toHaveBeenCalled();
     });
   });
 
   describe('finalizar', () => {
     const MEC = '00000000-0000-0000-0000-000000000099';
 
-    it('happy path: EN_EJECUCION → EJECUTADO', async () => {
+    it('happy path: EN_EJECUCION → EJECUTADO y guarda fechaFinEjecucion', async () => {
       mockTicket(TicketEstado.EN_EJECUCION, MEC);
       prisma.ticket.update.mockResolvedValue({});
       prisma.eventoEstadoTicket.create.mockResolvedValue({});
 
-      await service.finalizar(TENANT, MEC, TICKET_ID, { observacion: 'ok' });
+      await service.finalizar(TENANT, mechActor(MEC), TICKET_ID, {
+        observacion: 'ok',
+      });
 
       const updateArgs = prisma.ticket.update.mock.calls[0][0];
       expect(updateArgs.data.estado).toBe(TicketEstado.EJECUTADO);
+      expect(updateArgs.data.fechaFinEjecucion).toBeInstanceOf(Date);
     });
 
     it('falla con Forbidden si no es el mecanico asignado', async () => {
       mockTicket(TicketEstado.EN_EJECUCION, MEC);
 
       await expect(
-        service.finalizar(TENANT, 'otro', TICKET_ID, {}),
+        service.finalizar(TENANT, MEC_ACTOR_OTHER, TICKET_ID, {}),
       ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('admin intentando finalizar (aunque sea mecanicoId del ticket) → ForbiddenException', async () => {
+      await expect(
+        service.finalizar(TENANT, { id: MEC, role: 'admin' }, TICKET_ID, {}),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.ticket.findFirst).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
+    it('usa prisma.$transaction para finalizar', async () => {
+      mockTicket(TicketEstado.EN_EJECUCION, MEC);
+      prisma.ticket.update.mockResolvedValue({});
+      prisma.eventoEstadoTicket.create.mockResolvedValue({});
+
+      await service.finalizar(TENANT, mechActor(MEC), TICKET_ID, {});
+
+      expect(prisma.$transaction).toHaveBeenCalled();
     });
   });
 
@@ -701,10 +854,18 @@ describe('TicketsService', () => {
         eventos: [],
       });
 
-      await service.validar(TENANT, USER, TICKET_ID, { aprobado: true });
+      await service.validar(TENANT, ADMIN_ACTOR, TICKET_ID, {
+        aprobado: true,
+      });
 
       const updateArgs = prisma.ticket.update.mock.calls[0][0];
       expect(updateArgs.data.estado).toBe(TicketEstado.CERRADO);
+      // Aprobado: guarda fechaValidacion + fechaCierre
+      expect(updateArgs.data.fechaValidacion).toBeInstanceOf(Date);
+      expect(updateArgs.data.fechaCierre).toBeInstanceOf(Date);
+      // Evento con estadoNuevo CERRADO
+      const evtArgs = prisma.eventoEstadoTicket.create.mock.calls[0][0];
+      expect(evtArgs.data.estadoNuevo).toBe(TicketEstado.CERRADO);
       expect(ordenesService.onTicketEstadoCambiado).toHaveBeenCalledWith(
         TENANT,
         OT_ID,
@@ -737,11 +898,21 @@ describe('TicketsService', () => {
         eventos: [],
       });
 
-      await service.validar(TENANT, USER, TICKET_ID, { aprobado: false });
+      await service.validar(TENANT, ADMIN_ACTOR, TICKET_ID, {
+        aprobado: false,
+        observacion: 'falta soldadura',
+      });
 
       const updateArgs = prisma.ticket.update.mock.calls[0][0];
       expect(updateArgs.data.estado).toBe(TicketEstado.EN_EJECUCION);
       expect(updateArgs.data.fechaFinEjecucion).toBeNull();
+      expect(updateArgs.data.fechaValidacion).toBeInstanceOf(Date);
+      // En rechazo NO se setea fechaCierre
+      expect(updateArgs.data.fechaCierre).toBeUndefined();
+      // Evento con estadoNuevo EN_EJECUCION y observación pasada por el actor
+      const evtArgs = prisma.eventoEstadoTicket.create.mock.calls[0][0];
+      expect(evtArgs.data.estadoNuevo).toBe(TicketEstado.EN_EJECUCION);
+      expect(evtArgs.data.observacion).toBe('falta soldadura');
       expect(ordenesService.onTicketEstadoCambiado).not.toHaveBeenCalled();
     });
 
@@ -749,8 +920,49 @@ describe('TicketsService', () => {
       mockTicket(TicketEstado.EN_EJECUCION, 'mec-1');
 
       await expect(
-        service.validar(TENANT, USER, TICKET_ID, { aprobado: true }),
+        service.validar(TENANT, ADMIN_ACTOR, TICKET_ID, { aprobado: true }),
       ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('mechanic intentando validar → ForbiddenException (defensa en profundidad)', async () => {
+      await expect(
+        service.validar(TENANT, mechActor('mec-1'), TICKET_ID, {
+          aprobado: true,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.ticket.findFirst).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
+    it('usa prisma.$transaction para validar', async () => {
+      mockTicket(TicketEstado.EJECUTADO, 'mec-1');
+      prisma.ticket.update.mockResolvedValue({});
+      prisma.eventoEstadoTicket.create.mockResolvedValue({});
+      prisma.ticket.findFirst.mockResolvedValueOnce({
+        id: TICKET_ID,
+        tenantId: TENANT,
+        otId: OT_ID,
+        codigo: 'TKT-2026-0001',
+        titulo: 't',
+        descripcion: 'd',
+        estado: TicketEstado.CERRADO,
+        prioridad: Prioridad.MEDIA,
+        mecanicoId: 'mec-1',
+        jefeId: USER,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        fechaAsignacion: null,
+        fechaInicioEjecucion: null,
+        fechaFinEjecucion: null,
+        fechaValidacion: null,
+        fechaCierre: null,
+        ot: { id: OT_ID, codigo: 'OT-1', equipo: null },
+        eventos: [],
+      });
+
+      await service.validar(TENANT, ADMIN_ACTOR, TICKET_ID, { aprobado: true });
+
+      expect(prisma.$transaction).toHaveBeenCalled();
     });
   });
 
@@ -781,7 +993,7 @@ describe('TicketsService', () => {
         eventos: [],
       });
 
-      await service.cerrar(TENANT, USER, TICKET_ID, {});
+      await service.cerrar(TENANT, ADMIN_ACTOR, TICKET_ID, {});
 
       const updateArgs = prisma.ticket.update.mock.calls[0][0];
       expect(updateArgs.data.estado).toBe(TicketEstado.CERRADO);
@@ -795,8 +1007,14 @@ describe('TicketsService', () => {
       mockTicket(TicketEstado.CERRADO, 'mec-1');
 
       await expect(
-        service.cerrar(TENANT, USER, TICKET_ID, {}),
+        service.cerrar(TENANT, ADMIN_ACTOR, TICKET_ID, {}),
       ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('mechanic intentando cerrar → ForbiddenException', async () => {
+      await expect(
+        service.cerrar(TENANT, mechActor('mec-1'), TICKET_ID, {}),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 });

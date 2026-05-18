@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -21,6 +22,11 @@ import {
 } from './dto/evidencia-response.dto';
 
 const BUCKET = 'evidencias';
+// Nota: el SDK v2 de Supabase NO permite TTL custom en createSignedUploadUrl.
+// El TTL real del token lo controla el servidor de Supabase (varía por versión,
+// orden de magnitud ~10 min). UPLOAD_TTL_SECONDS es el valor que reportamos al
+// frontend en `expiresIn` como contrato/UX. Si más adelante el SDK expone TTL
+// configurable, este es el único lugar a tocar.
 const UPLOAD_TTL_SECONDS = 60;
 const DOWNLOAD_TTL_SECONDS = 5 * 60;
 
@@ -29,6 +35,9 @@ const MIME_TO_EXT: Record<AllowedMime, string> = {
   'image/png': 'png',
   'image/webp': 'webp',
 };
+
+// Extensiones aceptadas en el storagePath (set inverso a MIME_TO_EXT).
+const ALLOWED_EXTS = new Set(Object.values(MIME_TO_EXT));
 
 @Injectable()
 export class EvidenciasService {
@@ -84,22 +93,48 @@ export class EvidenciasService {
   ): Promise<EvidenciaResponseDto> {
     await this.ensureTicketAccess(tenantId, user, ticketId);
 
-    if (!dto.storagePath.startsWith(`${tenantId}/${ticketId}/`)) {
-      throw new ForbiddenException(
-        'storagePath no coincide con tenant/ticket actual',
-      );
-    }
+    // Defensa contra path traversal / tenant ajeno / extensión inválida.
+    // Se valida AQUÍ además de la policy RLS de storage.objects para que el
+    // backend rechace antes de tocar Storage incluso si la RLS falla.
+    this.assertSafeStoragePath(dto.storagePath, tenantId, ticketId);
 
+    const filename = dto.storagePath.split('/').pop() ?? '';
     const admin = this.supabase.getAdminClient();
     const { data: head, error: headError } = await admin.storage
       .from(BUCKET)
-      .list(`${tenantId}/${ticketId}`, {
-        search: dto.storagePath.split('/').pop() ?? '',
-      });
+      .list(`${tenantId}/${ticketId}`, { search: filename });
     if (headError || !head || head.length === 0) {
       throw new NotFoundException(
         'Archivo no encontrado en storage; subida no completada',
       );
+    }
+    // `list()` retorna múltiples si el `search` matchea como prefijo. Buscamos
+    // la fila exacta por nombre para leer su metadata real.
+    const fileEntry = head.find((h: { name: string }) => h.name === filename);
+    if (!fileEntry) {
+      throw new NotFoundException(
+        'Archivo no encontrado en storage; subida no completada',
+      );
+    }
+
+    // Re-validar MIME y size leyendo metadata real del objeto, no del DTO
+    // (el cliente podría haber subido algo distinto a lo declarado).
+    const meta = (fileEntry as { metadata?: { size?: number; mimetype?: string } })
+      .metadata;
+    if (meta) {
+      if (typeof meta.size === 'number' && meta.size > MAX_BYTES) {
+        throw new PayloadTooLargeException(
+          `Archivo subido excede el máximo (${meta.size} > ${MAX_BYTES} bytes)`,
+        );
+      }
+      if (
+        typeof meta.mimetype === 'string' &&
+        !ALLOWED_MIME.includes(meta.mimetype as AllowedMime)
+      ) {
+        throw new BadRequestException(
+          `MIME real del archivo no permitido: ${meta.mimetype}`,
+        );
+      }
     }
 
     const row = await this.prisma.evidencia.create({
@@ -171,6 +206,44 @@ export class EvidenciasService {
     if (user.role === 'mechanic' && ticket.mecanicoId === user.id) return;
 
     throw new ForbiddenException('Sin acceso a evidencias de este ticket');
+  }
+
+  /**
+   * Valida que el storagePath:
+   *   - sea exactamente `{tenant}/{ticket}/{filename}` (3 segmentos)
+   *   - no contenga `..` ni `\` (path traversal)
+   *   - termine en una extensión permitida (jpg/png/webp)
+   * Defensa en profundidad sobre la policy RLS de storage.objects.
+   */
+  private assertSafeStoragePath(
+    storagePath: string,
+    tenantId: string,
+    ticketId: string,
+  ): void {
+    if (storagePath.includes('..') || storagePath.includes('\\')) {
+      throw new ForbiddenException('storagePath contiene segmentos inválidos');
+    }
+    const segments = storagePath.split('/');
+    if (segments.length !== 3) {
+      throw new ForbiddenException(
+        'storagePath debe tener forma {tenant}/{ticket}/{filename}',
+      );
+    }
+    const [pathTenant, pathTicket, filename] = segments;
+    if (pathTenant !== tenantId || pathTicket !== ticketId) {
+      throw new ForbiddenException(
+        'storagePath no coincide con tenant/ticket actual',
+      );
+    }
+    if (!filename || filename.startsWith('.')) {
+      throw new ForbiddenException('filename inválido');
+    }
+    const ext = filename.split('.').pop()?.toLowerCase();
+    if (!ext || !ALLOWED_EXTS.has(ext)) {
+      throw new BadRequestException(
+        `Extensión de archivo no permitida: .${ext ?? ''}`,
+      );
+    }
   }
 
   private async signDownload(storagePath: string): Promise<string | null> {
