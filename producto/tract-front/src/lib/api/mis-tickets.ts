@@ -247,13 +247,13 @@ export async function subirEvidencia(
   try {
     assertApiBaseUrl();
 
-    // 1. Pedir signed URL al backend
+    // 1. Pedir signed URL al backend. El DTO espera { mime, size }.
     const signedUrlResponse = await authFetch(
       `${API_BASE_URL}/tickets/${ticketId}/evidencia/signed-url`,
       {
         body: JSON.stringify({
-          contentType: file.type,
-          fileName: file.name,
+          mime: file.type,
+          size: file.size,
         }),
         headers: {
           "Content-Type": "application/json",
