@@ -77,6 +77,101 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
+## Evidencias fotográficas (API-05)
+
+Subida de fotos asociadas a un ticket vía Supabase Storage. El backend genera
+URLs firmadas de upload (service role), valida MIME/size y autorización por
+tenant, y registra la metadata en la tabla `evidencias`.
+
+### Variables de entorno
+
+| Variable                       | Uso                                                              |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `SUPABASE_URL`                 | URL del proyecto Supabase                                        |
+| `SUPABASE_ANON_KEY`            | Auth (verificación del JWT del usuario)                          |
+| `SUPABASE_SERVICE_ROLE_KEY`    | Operaciones admin sobre Storage (signed URLs, list, metadata)    |
+
+### Provisionar bucket + policies RLS
+
+```bash
+# Aplica la migration que crea el bucket privado "evidencias" + policies
+supabase db push
+```
+
+El SQL vive en `supabase/migrations/20260517210000_evidencias_bucket.sql` y
+configura:
+
+- Bucket privado `evidencias` (no acceso público).
+- `file_size_limit = 5 MB`.
+- `allowed_mime_types = image/jpeg, image/png, image/webp`.
+- Policies sobre `storage.objects`:
+  - `SELECT`: admin del tenant ó mecánico asignado al ticket.
+  - `INSERT`: mismo criterio.
+  - `DELETE`: solo admin del tenant.
+- Path convención: `{tenant_id}/{ticket_id}/{uuid}.{ext}`.
+
+### Mapeo de roles
+
+API-05 (y el resto del sistema) usa los roles internos en inglés del enum
+`user_role` de Supabase:
+
+| Negocio (tarea) | Sistema    |
+| --------------- | ---------- |
+| jefe de taller  | `admin`    |
+| mecánico        | `mechanic` |
+
+Ver [src/auth/types.ts](src/auth/types.ts) para más detalle.
+
+### Límites y TTLs
+
+| Concepto                 | Valor                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| MIMEs permitidos          | `image/jpeg`, `image/png`, `image/webp`                                                     |
+| Tamaño máximo             | 5 MB (rechazado por DTO antes de Storage y revalidado contra metadata real al confirmar)    |
+| Signed upload URL `expiresIn` | Reportamos 60 s al frontend. Limitación: el SDK v2 de Supabase no expone TTL configurable; el TTL real del token lo controla el servidor (~10 min). El backend valida re-existencia + metadata al confirmar para mitigar el desfase. |
+| Signed download URL      | 5 min (`createSignedUrl(path, 300)`)                                                        |
+
+### Flujo HTTP (ejemplo con curl)
+
+```bash
+TOKEN=...      # JWT Supabase
+TICKET=tk-1
+
+# 1) Pedir URL firmada de upload
+curl -X POST "$BASE_URL/tickets/$TICKET/evidencia/signed-url" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"mime":"image/jpeg","size":120000}'
+# → { "uploadUrl":"https://...", "token":"...", "storagePath":"demo/tk-1/abc.jpg", "expiresIn":60 }
+
+# 2) Subir el archivo a la URL firmada (cliente directo a Supabase Storage)
+curl -X PUT "$UPLOAD_URL" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @./foto.jpg
+
+# 3) Registrar la metadata
+curl -X POST "$BASE_URL/tickets/$TICKET/evidencia" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"storagePath":"demo/tk-1/abc.jpg","descripcion":"foto pre"}'
+
+# 4) Listar evidencias del ticket (downloadUrl firmada 5 min)
+curl -X GET "$BASE_URL/tickets/$TICKET/evidencias" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Validaciones de seguridad
+
+- Autenticación obligatoria en los 3 endpoints (`AuthGuard` → 401 sin token).
+- Autorización: `admin` del tenant o `mechanic` asignado al ticket (`RolesGuard`
+  + check explícito en service).
+- MIME y `size` validados en DTO + revalidados contra metadata real al
+  confirmar (no se confía en lo declarado por el cliente).
+- `storage_path` debe ser exactamente `{tenant}/{ticket}/{filename}`,
+  extensión `.jpg`/`.png`/`.webp`, sin `..` ni `\`.
+- Cobertura de tests: ver `src/evidencias/evidencias.service.spec.ts` y
+  `test/evidencias.e2e-spec.ts`.
+
 ## Deployment
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.

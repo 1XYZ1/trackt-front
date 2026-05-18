@@ -16,7 +16,10 @@ import { Roles } from '../auth/roles.decorator';
 import { AuthUser } from '../auth/types';
 import { TenantService } from '../common/tenant/tenant.service';
 import { TicketsService } from './tickets.service';
-import { ListTicketsQueryDto } from './dto/list-tickets-query.dto';
+import {
+  ListTicketsQueryDto,
+  resolveTicketsFilters,
+} from './dto/list-tickets-query.dto';
 import { AsignarTicketDto } from './dto/asignar-ticket.dto';
 import { FinalizarTicketDto } from './dto/finalizar-ticket.dto';
 import { ValidarTicketDto } from './dto/validar-ticket.dto';
@@ -41,7 +44,7 @@ export class TicketsController {
     @Query() query: ListTicketsQueryDto,
   ) {
     const tenantId = this.tenantService.resolveTenantId(req.user);
-    return this.ticketsService.findAll(tenantId, query);
+    return this.ticketsService.findAll(tenantId, resolveTicketsFilters(query));
   }
 
   @Roles('admin', 'mechanic')
@@ -62,7 +65,7 @@ export class TicketsController {
     @Body() dto: AsignarTicketDto,
   ) {
     const tenantId = this.tenantService.resolveTenantId(req.user);
-    return this.ticketsService.asignar(tenantId, req.user.id, id, dto);
+    return this.ticketsService.asignar(tenantId, req.user, id, dto);
   }
 
   @Roles('mechanic')
@@ -70,7 +73,7 @@ export class TicketsController {
   @Post(':id/iniciar')
   async iniciar(@Req() req: RequestWithUser, @Param('id') id: string) {
     const tenantId = this.tenantService.resolveTenantId(req.user);
-    return this.ticketsService.iniciar(tenantId, req.user.id, id);
+    return this.ticketsService.iniciar(tenantId, req.user, id);
   }
 
   @Roles('mechanic')
@@ -82,7 +85,7 @@ export class TicketsController {
     @Body() dto: FinalizarTicketDto,
   ) {
     const tenantId = this.tenantService.resolveTenantId(req.user);
-    return this.ticketsService.finalizar(tenantId, req.user.id, id, dto);
+    return this.ticketsService.finalizar(tenantId, req.user, id, dto);
   }
 
   @Roles('admin')
@@ -94,7 +97,7 @@ export class TicketsController {
     @Body() dto: ValidarTicketDto,
   ) {
     const tenantId = this.tenantService.resolveTenantId(req.user);
-    return this.ticketsService.validar(tenantId, req.user.id, id, dto);
+    return this.ticketsService.validar(tenantId, req.user, id, dto);
   }
 
   @Roles('admin')
@@ -106,6 +109,6 @@ export class TicketsController {
     @Body() dto: CerrarTicketDto,
   ) {
     const tenantId = this.tenantService.resolveTenantId(req.user);
-    return this.ticketsService.cerrar(tenantId, req.user.id, id, dto);
+    return this.ticketsService.cerrar(tenantId, req.user, id, dto);
   }
 }

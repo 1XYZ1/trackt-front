@@ -1,4 +1,8 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { OrdenTrabajoEstado, Prioridad, TicketEstado } from '@prisma/client';
 import { OrdenesService } from './ordenes.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -187,6 +191,18 @@ describe('OrdenesService', () => {
         service.update(TENANT, OT_ID, { descripcion: 'x' }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
+
+    it('lanza BadRequestException si el body viene vacío (sin descripcion ni prioridad)', async () => {
+      prisma.ordenTrabajo.findFirst.mockResolvedValue({
+        id: OT_ID,
+        estado: OrdenTrabajoEstado.PENDIENTE,
+      });
+
+      await expect(service.update(TENANT, OT_ID, {})).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.ordenTrabajo.update).not.toHaveBeenCalled();
+    });
   });
 
   // ---------- cancelar ----------
@@ -255,6 +271,40 @@ describe('OrdenesService', () => {
         expect(prisma.ordenTrabajo.update).not.toHaveBeenCalled();
       },
     );
+
+    it('lanza NotFoundException si la OT pertenece a otro tenant', async () => {
+      // doble filtro id+tenantId en findFirst → no match → null
+      prisma.ordenTrabajo.findFirst.mockResolvedValue(null);
+
+      await expect(service.cancelar('otro-tenant', OT_ID)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+
+      const findArgs = prisma.ordenTrabajo.findFirst.mock.calls[0][0];
+      expect(findArgs.where).toEqual({ id: OT_ID, tenantId: 'otro-tenant' });
+      expect(prisma.ordenTrabajo.update).not.toHaveBeenCalled();
+      expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('NO cancela tickets en estado ASIGNADO/EN_EJECUCION/EJECUTADO/CERRADO', async () => {
+      // El filtro `estado: { in: [PENDIENTE] }` se valida en otro test.
+      // Aquí confirmamos que ninguno de los demás estados aparece en el `in`.
+      prisma.ordenTrabajo.findFirst.mockResolvedValue({
+        id: OT_ID,
+        estado: OrdenTrabajoEstado.EN_PROCESO,
+      });
+      prisma.ordenTrabajo.update.mockResolvedValue({ id: OT_ID });
+      prisma.ticket.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.cancelar(TENANT, OT_ID);
+
+      const ticketArgs = prisma.ticket.updateMany.mock.calls[0][0];
+      const cancelables = ticketArgs.where.estado.in as TicketEstado[];
+      expect(cancelables).not.toContain(TicketEstado.ASIGNADO);
+      expect(cancelables).not.toContain(TicketEstado.EN_EJECUCION);
+      expect(cancelables).not.toContain(TicketEstado.EJECUTADO);
+      expect(cancelables).not.toContain(TicketEstado.CERRADO);
+    });
   });
 
   // ---------- findOne ----------
@@ -287,6 +337,17 @@ describe('OrdenesService', () => {
       await expect(service.findOne(TENANT, OT_ID)).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+
+    it('lanza NotFoundException si la OT pertenece a otro tenant', async () => {
+      // doble filtro id+tenantId garantiza aislamiento entre tenants
+      prisma.ordenTrabajo.findFirst.mockResolvedValue(null);
+
+      await expect(service.findOne('otro-tenant', OT_ID)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      const findArgs = prisma.ordenTrabajo.findFirst.mock.calls[0][0];
+      expect(findArgs.where).toEqual({ id: OT_ID, tenantId: 'otro-tenant' });
     });
   });
 
@@ -391,6 +452,51 @@ describe('OrdenesService', () => {
         tenantId: TENANT,
         estado: OrdenTrabajoEstado.PENDIENTE,
         equipoId: EQUIPO_ID,
+      });
+    });
+
+    it('retorna estructura paginada { data, meta } con totalPages calculado', async () => {
+      const rows = [
+        {
+          id: OT_ID,
+          codigo: 'OT-2026-0001',
+          equipoId: EQUIPO_ID,
+          descripcion: 'd',
+          prioridad: Prioridad.MEDIA,
+          estado: OrdenTrabajoEstado.PENDIENTE,
+          fechaCierre: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ];
+      prisma.ordenTrabajo.findMany.mockResolvedValue(rows);
+      prisma.ordenTrabajo.count.mockResolvedValue(23);
+
+      const result = await service.findAll(TENANT, { page: 2, limit: 10 });
+
+      expect(prisma.ordenTrabajo.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 10, take: 10 }),
+      );
+      expect(result).toEqual({
+        data: rows,
+        meta: { page: 2, limit: 10, total: 23, totalPages: 3 },
+      });
+    });
+
+    it('aplica defaults page=1 limit=10 cuando el query viene vacío', async () => {
+      prisma.ordenTrabajo.findMany.mockResolvedValue([]);
+      prisma.ordenTrabajo.count.mockResolvedValue(0);
+
+      const result = await service.findAll(TENANT, {});
+
+      expect(prisma.ordenTrabajo.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, take: 10 }),
+      );
+      expect(result.meta).toEqual({
+        page: 1,
+        limit: 10,
+        total: 0,
+        totalPages: 0,
       });
     });
   });
