@@ -541,6 +541,7 @@ describe('TicketsService', () => {
     estado: TicketEstado,
     mecanicoId: string | null = null,
   ) {
+    // 1ra llamada: requireTicket() en cada transición.
     prisma.ticket.findFirst.mockResolvedValueOnce({
       id: TICKET_ID,
       estado,
@@ -549,7 +550,9 @@ describe('TicketsService', () => {
       jefeId: USER,
       fechaValidacion: null,
     });
-    prisma.ticket.findUniqueOrThrow.mockResolvedValue({
+    // 2da llamada: findOne() POST-transacción (asignar/iniciar/finalizar
+    // ahora hacen el read fuera de la tx para no exceder timeout).
+    const detail = {
       id: TICKET_ID,
       tenantId: TENANT,
       otId: OT_ID,
@@ -569,7 +572,9 @@ describe('TicketsService', () => {
       fechaCierre: null,
       ot: { id: OT_ID, codigo: 'OT-1', equipo: null },
       eventos: [],
-    });
+    };
+    prisma.ticket.findFirst.mockResolvedValueOnce(detail);
+    prisma.ticket.findUniqueOrThrow.mockResolvedValue(detail);
   }
 
   describe('asignar', () => {
